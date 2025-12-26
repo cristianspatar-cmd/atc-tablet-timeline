@@ -480,7 +480,21 @@ function App() {
     { id: makeId(), type: "ARR", time: "10:00" },
     { id: makeId(), type: "DEP", time: "10:40" },
   ]);
+const STORAGE_PREFIX = "atc_timeline_v1";
 
+function storageKey(dateStr: string) {
+  return `${STORAGE_PREFIX}:${dateStr}`;
+}
+
+type SavedDay = {
+  dateStr: string;
+  flights: { id: string; type: "ARR" | "DEP"; time: string }[];
+  buffers: Buffers;
+  daylight: { enabled: boolean; sunrise: number; sunset: number };
+  autoSun: boolean;
+  showNow: boolean;
+  savedAt: number; // epoch ms
+};
   const [buffers, setBuffers] = useState<Buffers>({
     arrBefore: 15,
     arrAfter: 5,
@@ -499,7 +513,47 @@ function App() {
 
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState("");
+useEffect(() => {
+  try {
+    const raw = localStorage.getItem(storageKey(dateStr));
+    if (!raw) return;
 
+    const parsed = JSON.parse(raw) as SavedDay;
+    if (!parsed || parsed.dateStr !== dateStr) return;
+
+    // rehydrate
+    setFlights(parsed.flights?.length ? parsed.flights : []);
+    setBuffers(parsed.buffers ?? { arrBefore: 15, arrAfter: 5, depBefore: 10, depAfter: 5 });
+    setDaylight(parsed.daylight ?? { enabled: true, sunrise: 8 * 60, sunset: 16 * 60 + 30 });
+    setAutoSun(parsed.autoSun ?? true);
+    setShowNow(parsed.showNow ?? true);
+  } catch {
+    // ignore corrupt storage
+  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [dateStr]);
+useEffect(() => {
+  const payload: SavedDay = {
+    dateStr,
+    flights,
+    buffers,
+    daylight,
+    autoSun,
+    showNow,
+    savedAt: Date.now(),
+  };
+
+  // Debounce 300ms ca să nu scrie în storage la fiecare tastă
+  const id = window.setTimeout(() => {
+    try {
+      localStorage.setItem(storageKey(dateStr), JSON.stringify(payload));
+    } catch {
+      // storage full / blocked — ignore
+    }
+  }, 300);
+
+  return () => window.clearTimeout(id);
+}, [dateStr, flights, buffers, daylight, autoSun, showNow]);
   useEffect(() => {
     if (!autoSun) return;
     try {
