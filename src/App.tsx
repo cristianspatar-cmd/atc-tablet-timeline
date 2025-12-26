@@ -476,6 +476,9 @@ function App() {
 
   const [dateStr, setDateStr] = useState(defaultTodayStr());
 
+const [nowM, setNowM] = useState(nowMinutesLocal());
+useInterval(() => setNowM(nowMinutesLocal()), isToday(dateStr) ? 1000 : null);
+
   const [flights, setFlights] = useState<{ id: string; type: "ARR" | "DEP"; time: string }[]>(() => [
     { id: makeId(), type: "ARR", time: "10:00" },
     { id: makeId(), type: "DEP", time: "10:40" },
@@ -582,6 +585,20 @@ useEffect(() => {
 
   const ifrBlocks = useMemo(() => buildIFRBlocks(flightsParsed, buffers), [flightsParsed, buffers]);
   const mergedIFR = useMemo(() => mergeBlocks(ifrBlocks), [ifrBlocks]);
+const ifrWarning = useMemo(() => {
+  if (!isToday(dateStr)) return null;
+
+  // Caută următoarea fereastră IFR care începe după "acum"
+  for (const b of mergedIFR) {
+    const minsToStart = b.start - nowM;
+
+    // Afișăm doar în ultimele 10 minute înainte de IFR
+    if (minsToStart > 0 && minsToStart <= 10) {
+      return { minsLeft: Math.ceil(minsToStart) };
+    }
+  }
+  return null;
+}, [dateStr, mergedIFR, nowM]);
   const freeWindows = useMemo(() => computeFreeWindows(mergedIFR, daylight), [mergedIFR, daylight]);
   const vfrWindows = useMemo(() => classifyVFR(freeWindows, 30, 20), [freeWindows]);
 
@@ -602,7 +619,22 @@ useEffect(() => {
   function removeRow(id: string) {
     setFlights((p) => p.filter((x) => x.id !== id));
   }
+function clearToday() {
+  if (!window.confirm("Ștergi planul pentru ziua curentă?")) return;
 
+  setFlights([]);
+  // opțional: resetezi și buffer-ele la default
+  setBuffers({
+    arrBefore: 15,
+    arrAfter: 5,
+    depBefore: 10,
+    depAfter: 5,
+  });
+
+  try {
+    localStorage.removeItem(storageKey(dateStr));
+  } catch {}
+}
   function applyPaste() {
     const parsed = parsePaste(pasteText);
     if (!parsed.length) {
@@ -637,6 +669,11 @@ useEffect(() => {
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
           <div className="text-xl font-semibold">ATC Day Timeline (Tablet)</div>
+{ifrWarning ? (
+  <div className="rounded-xl border border-yellow-300 bg-yellow-50 px-3 py-2 text-sm">
+    <div className="font-semibold">⚠️ IFR în {ifrWarning.minsLeft} minute</div>
+  </div>
+) : null}
           <div className="text-sm text-muted-foreground">
             Introduce doar ore ARR/DEP pentru ziua în curs. Obții timeline + ferestre VFR.
           </div>
@@ -713,7 +750,15 @@ useEffect(() => {
     </Button>
   </div>
 )}
-
+{!isBriefing && (
+  <Button
+    variant="outline"
+    onClick={clearToday}
+    className="text-red-600 border-red-300 hover:bg-red-50"
+  >
+    Clear today
+  </Button>
+)}
             </div>
 
             {pasteOpen ? (
