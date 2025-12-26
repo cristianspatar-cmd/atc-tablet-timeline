@@ -472,6 +472,8 @@ function makeId() {
 }
 
 function App() {
+  const isBriefing = new URLSearchParams(window.location.search).get("briefing") === "1";
+
   const [dateStr, setDateStr] = useState(defaultTodayStr());
 
   const [flights, setFlights] = useState<{ id: string; type: "ARR" | "DEP"; time: string }[]>(() => [
@@ -607,12 +609,16 @@ function App() {
                 <Label className="text-xs">ARR buffer</Label>
                 <div className="grid grid-cols-2 gap-2 mt-1">
                   <Input
-                    inputMode="numeric"
-                    value={buffers.arrBefore}
-                    onChange={(e) => setBuffers((b) => ({ ...b, arrBefore: Number(e.target.value || 0) }))}
-                    placeholder="min înainte"
-                  />
+  disabled={isBriefing}
+  inputMode="numeric"
+  value={buffers.arrBefore}
+  onChange={(e) => {
+    if (isBriefing) return;
+    setBuffers((b) => ({ ...b, arrBefore: Number(e.target.value || 0) }));
+  }}
+/>
                   <Input
+		    disabled={isBriefing}
                     inputMode="numeric"
                     value={buffers.arrAfter}
                     onChange={(e) => setBuffers((b) => ({ ...b, arrAfter: Number(e.target.value || 0) }))}
@@ -626,12 +632,14 @@ function App() {
                 <Label className="text-xs">DEP buffer</Label>
                 <div className="grid grid-cols-2 gap-2 mt-1">
                   <Input
+		    disabled={isBriefing}
                     inputMode="numeric"
                     value={buffers.depBefore}
                     onChange={(e) => setBuffers((b) => ({ ...b, depBefore: Number(e.target.value || 0) }))}
                     placeholder="min înainte"
                   />
                   <Input
+		    disabled={isBriefing}
                     inputMode="numeric"
                     value={buffers.depAfter}
                     onChange={(e) => setBuffers((b) => ({ ...b, depAfter: Number(e.target.value || 0) }))}
@@ -641,14 +649,17 @@ function App() {
                 <div className="text-[11px] text-muted-foreground mt-1">ex: -10 / +5</div>
               </div>
 
-              <div className="flex items-center justify-between gap-2">
-                <Button variant="secondary" onClick={() => setPasteOpen((v) => !v)}>
-                  <ClipboardPaste className="h-4 w-4 mr-2" /> Paste
-                </Button>
-                <Button onClick={addRow}>
-                  <Plus className="h-4 w-4 mr-2" /> Add
-                </Button>
-              </div>
+             {!isBriefing && (
+  <div className="flex items-center justify-between gap-2">
+    <Button variant="secondary" onClick={() => setPasteOpen((v) => !v)}>
+      <ClipboardPaste className="h-4 w-4 mr-2" /> Paste
+    </Button>
+    <Button onClick={addRow}>
+      <Plus className="h-4 w-4 mr-2" /> Add
+    </Button>
+  </div>
+)}
+
             </div>
 
             {pasteOpen ? (
@@ -693,32 +704,36 @@ function App() {
               {flights.map((f) => (
                 <div key={f.id} className="grid grid-cols-12 gap-2 items-center">
                   <div className="col-span-4">
-                    <select
-                      className="h-9 w-full rounded-xl border border-border bg-background px-3 text-sm"
-                      value={f.type}
-                      onChange={(e) => {
-                        const v = e.target.value as "ARR" | "DEP";
-                        setFlights((p) => p.map((x) => (x.id === f.id ? { ...x, type: v } : x)));
-                      }}
-                    >
-                      <option value="ARR">ARR</option>
-                      <option value="DEP">DEP</option>
-                    </select>
+                   <select
+  disabled={isBriefing}
+  className="h-9 w-full rounded-xl border border-border bg-background px-3 text-sm"
+  value={f.type}
+  onChange={(e) => {
+    if (isBriefing) return;
+    const v = e.target.value as "ARR" | "DEP";
+    setFlights((p) => p.map((x) => (x.id === f.id ? { ...x, type: v } : x)));
+  }}
+>
+  <option value="ARR">ARR</option>
+  <option value="DEP">DEP</option>
+</select>
                   </div>
 
                   <div className="col-span-6">
-                    <Input
-                      value={f.time}
-                      onChange={(e) => {
-                        const v = normalizeTimeInput(e.target.value);
-                        setFlights((p) => p.map((x) => (x.id === f.id ? { ...x, time: v } : x)));
-                      }}
-                      placeholder="HH:MM / HH.MM / HHMM"
-                      className="font-mono"
-                      inputMode="text"
-                      autoCapitalize="off"
-                      autoCorrect="off"
-                    />
+                   <Input
+  disabled={isBriefing}
+  value={f.time}
+  onChange={(e) => {
+    if (isBriefing) return;
+    const v = normalizeTimeInput(e.target.value);
+    setFlights((p) => p.map((x) => (x.id === f.id ? { ...x, time: v } : x)));
+  }}
+  placeholder="HH:MM / HH.MM / HHMM"
+  className="font-mono"
+  inputMode="text"
+  autoCapitalize="off"
+  autoCorrect="off"
+/>
                     {parseHHMM(f.time) == null && f.time ? (
                       <div className="text-[11px] text-red-500 mt-1">
                         Format invalid. Folosește HH:MM / HH.MM / HHMM (ex: 07:05, 07.05, 0705)
@@ -727,10 +742,12 @@ function App() {
                   </div>
 
                   <div className="col-span-2 flex justify-end">
-                    <Button variant="ghost" size="icon" onClick={() => removeRow(f.id)} title="Remove">
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
+  {!isBriefing && (
+    <Button variant="ghost" size="icon" onClick={() => removeRow(f.id)} title="Remove">
+      <Trash2 className="h-4 w-4" />
+    </Button>
+  )}
+</div>
                 </div>
               ))}
             </div>
