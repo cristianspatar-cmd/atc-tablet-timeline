@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+// src/App.tsx
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Trash2, Plus, ClipboardPaste, Clock, Sun, Moon, Wand2 } from "lucide-react";
 import SunCalc from "suncalc";
 import { motion } from "framer-motion";
@@ -8,6 +9,9 @@ import { motion } from "framer-motion";
  * - Enter only ARR/DEP and local times
  * - Generates IFR blocks with buffers + VFR windows
  * - Daylight window: auto sunrise/sunset for Bucharest (Europe/Bucharest) or manual override
+ * - Briefing mode: ?briefing=1 (read-only)
+ * - Autosave to localStorage per day
+ * - Optional auto-import (ROMATSA) every 5 minutes (hook stub below)
  */
 
 // ------------------------
@@ -15,7 +19,6 @@ import { motion } from "framer-motion";
 // ------------------------
 function Card({ className = "", children }: { className?: string; children: React.ReactNode }) {
   return <div className={`rounded-2xl border bg-background shadow-sm ${className}`}>{children}</div>;
-<div className="bg-red-500 text-white p-4 rounded-xl">TAILWIND TEST</div>
 }
 function CardHeader({ className = "", children }: { className?: string; children: React.ReactNode }) {
   return <div className={`p-4 pb-2 ${className}`}>{children}</div>;
@@ -35,6 +38,7 @@ function Button({
   size = "md",
   type = "button",
   title,
+  disabled,
 }: {
   children: React.ReactNode;
   onClick?: () => void;
@@ -43,9 +47,10 @@ function Button({
   size?: "md" | "icon";
   type?: "button" | "submit";
   title?: string;
+  disabled?: boolean;
 }) {
   const base =
-    "inline-flex items-center justify-center rounded-xl text-sm font-medium transition border select-none";
+    "inline-flex items-center justify-center rounded-xl text-sm font-medium transition border select-none disabled:opacity-50 disabled:pointer-events-none";
   const sizes = size === "icon" ? "h-9 w-9" : "h-9 px-3";
   const v =
     variant === "primary"
@@ -56,7 +61,13 @@ function Button({
       ? "bg-transparent text-foreground border-border hover:bg-muted/40"
       : "bg-transparent text-foreground border-transparent hover:bg-muted/40";
   return (
-    <button type={type} onClick={onClick} className={`${base} ${sizes} ${v} ${className}`} title={title}>
+    <button
+      type={type}
+      onClick={onClick}
+      className={`${base} ${sizes} ${v} ${className}`}
+      title={title}
+      disabled={disabled}
+    >
       {children}
     </button>
   );
@@ -76,14 +87,14 @@ function Label({ className = "", children }: { className?: string; children: Rea
   return <div className={`text-sm font-medium ${className}`}>{children}</div>;
 }
 
-function Switch({ checked, onCheckedChange }: { checked: boolean; onCheckedChange: (v: boolean) => void }) {
+function Switch({ checked, onCheckedChange, disabled }: { checked: boolean; onCheckedChange: (v: boolean) => void; disabled?: boolean }) {
   return (
     <button
       type="button"
-      onClick={() => onCheckedChange(!checked)}
+      onClick={() => !disabled && onCheckedChange(!checked)}
       className={`h-6 w-11 rounded-full border transition relative ${
         checked ? "bg-black border-black" : "bg-muted border-border"
-      }`}
+      } ${disabled ? "opacity-50 pointer-events-none" : ""}`}
       aria-checked={checked}
       role="switch"
     >
@@ -160,7 +171,6 @@ function nowMinutesLocal() {
 }
 
 function minutesInTZ(date: Date, timeZone: string) {
-  // Convert a Date to minutes-from-midnight in a target IANA timezone (e.g., Europe/Bucharest)
   const parts = new Intl.DateTimeFormat("en-GB", {
     timeZone,
     hour12: false,
@@ -280,8 +290,8 @@ function classifyVFR(windows: { start: number; end: number }[], recMin = 30, pos
 function useInterval(callback: () => void, delay: number | null) {
   useEffect(() => {
     if (delay == null) return;
-    const id = setInterval(callback, delay);
-    return () => clearInterval(id);
+    const id = window.setInterval(callback, delay);
+    return () => window.clearInterval(id);
   }, [callback, delay]);
 }
 
@@ -446,6 +456,7 @@ function Timeline({
   );
 }
 
+// Paste helper
 function parsePaste(text: string) {
   const lines = String(text || "")
     .split(/\r?\n/)
@@ -471,18 +482,10 @@ function makeId() {
   return `id_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function App() {
-  const isBriefing = new URLSearchParams(window.location.search).get("briefing") === "1";
-
-  const [dateStr, setDateStr] = useState(defaultTodayStr());
-
-const [nowM, setNowM] = useState(nowMinutesLocal());
-useInterval(() => setNowM(nowMinutesLocal()), isToday(dateStr) ? 1000 : null);
-
-  const [flights, setFlights] = useState<{ id: string; type: "ARR" | "DEP"; time: string }[]>(() => [
-    { id: makeId(), type: "ARR", time: "10:00" },
-    { id: makeId(), type: "DEP", time: "10:40" },
-  ]);
+// ------------------------
+// App
+// ------------------------
+const AUTO_REFRESH_MIN = 5;
 const STORAGE_PREFIX = "atc_timeline_v1";
 
 function storageKey(dateStr: string) {
@@ -498,6 +501,16 @@ type SavedDay = {
   showNow: boolean;
   savedAt: number; // epoch ms
 };
+
+export default function App() {
+  const isBriefing = new URLSearchParams(window.location.search).get("briefing") === "1";
+  const [dateStr, setDateStr] = useState(defaultTodayStr());
+
+  const [flights, setFlights] = useState<{ id: string; type: "ARR" | "DEP"; time: string }[]>(() => [
+    { id: makeId(), type: "ARR", time: "10:00" },
+    { id: makeId(), type: "DEP", time: "10:40" },
+  ]);
+
   const [buffers, setBuffers] = useState<Buffers>({
     arrBefore: 15,
     arrAfter: 5,
@@ -516,47 +529,55 @@ type SavedDay = {
 
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState("");
-useEffect(() => {
-  try {
-    const raw = localStorage.getItem(storageKey(dateStr));
-    if (!raw) return;
 
-    const parsed = JSON.parse(raw) as SavedDay;
-    if (!parsed || parsed.dateStr !== dateStr) return;
+  const [lastUpdate, setLastUpdate] = useState<string | null>(null);
 
-    // rehydrate
-    setFlights(parsed.flights?.length ? parsed.flights : []);
-    setBuffers(parsed.buffers ?? { arrBefore: 15, arrAfter: 5, depBefore: 10, depAfter: 5 });
-    setDaylight(parsed.daylight ?? { enabled: true, sunrise: 8 * 60, sunset: 16 * 60 + 30 });
-    setAutoSun(parsed.autoSun ?? true);
-    setShowNow(parsed.showNow ?? true);
-  } catch {
-    // ignore corrupt storage
-  }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [dateStr]);
-useEffect(() => {
-  const payload: SavedDay = {
-    dateStr,
-    flights,
-    buffers,
-    daylight,
-    autoSun,
-    showNow,
-    savedAt: Date.now(),
-  };
+  // for IFR warning
+  const [nowM, setNowM] = useState(nowMinutesLocal());
+  useInterval(() => setNowM(nowMinutesLocal()), isToday(dateStr) ? 1000 : null);
 
-  // Debounce 300ms ca să nu scrie în storage la fiecare tastă
-  const id = window.setTimeout(() => {
+  // ---- Load saved day from localStorage
+  useEffect(() => {
     try {
-      localStorage.setItem(storageKey(dateStr), JSON.stringify(payload));
-    } catch {
-      // storage full / blocked — ignore
-    }
-  }, 300);
+      const raw = localStorage.getItem(storageKey(dateStr));
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as SavedDay;
+      if (!parsed || parsed.dateStr !== dateStr) return;
 
-  return () => window.clearTimeout(id);
-}, [dateStr, flights, buffers, daylight, autoSun, showNow]);
+      setFlights(parsed.flights?.length ? parsed.flights : []);
+      setBuffers(parsed.buffers ?? { arrBefore: 15, arrAfter: 5, depBefore: 10, depAfter: 5 });
+      setDaylight(parsed.daylight ?? { enabled: true, sunrise: 8 * 60, sunset: 16 * 60 + 30 });
+      setAutoSun(parsed.autoSun ?? true);
+      setShowNow(parsed.showNow ?? true);
+    } catch {
+      // ignore corrupt storage
+    }
+  }, [dateStr]);
+
+  // ---- Save (debounced) to localStorage
+  useEffect(() => {
+    const payload: SavedDay = {
+      dateStr,
+      flights,
+      buffers,
+      daylight,
+      autoSun,
+      showNow,
+      savedAt: Date.now(),
+    };
+
+    const id = window.setTimeout(() => {
+      try {
+        localStorage.setItem(storageKey(dateStr), JSON.stringify(payload));
+      } catch {
+        // ignore
+      }
+    }, 300);
+
+    return () => window.clearTimeout(id);
+  }, [dateStr, flights, buffers, daylight, autoSun, showNow]);
+
+  // ---- Auto sunrise/sunset (Bucharest time)
   useEffect(() => {
     if (!autoSun) return;
     try {
@@ -575,6 +596,55 @@ useEffect(() => {
     }
   }, [dateStr, autoSun]);
 
+  // =========================
+  // ROMATSA AUTO-IMPORT (stub)
+  // =========================
+  /**
+   * IMPORTANT:
+   * Browsers cannot scrape arbitrary websites due to CORS.
+   * You need either:
+   *  - a JSON endpoint you control (proxy) OR
+   *  - paste/import from a known same-origin path (e.g. /romatsa.json)
+   *
+   * For now, this function is safe (no infinite re-renders) and does nothing unless you add your fetch.
+   */
+  const importFromRomatsaInit = useCallback(async () => {
+    // Example (if you have a same-origin json):
+    // const res = await fetch("/romatsa.json", { cache: "no-store" });
+    // if (!res.ok) return;
+    // const data = await res.json() as { arr: string[]; dep: string[] };
+    // const nextFlights = [
+    //   ...data.arr.map((t) => ({ id: makeId(), type: "ARR" as const, time: normalizeTimeInput(t) })),
+    //   ...data.dep.map((t) => ({ id: makeId(), type: "DEP" as const, time: normalizeTimeInput(t) })),
+    // ];
+    // setFlights(nextFlights);
+
+    // Mark last update time (Romania) ONLY when the import runs (not per render)
+    setLastUpdate(
+      new Date().toLocaleTimeString("ro-RO", {
+        hour: "2-digit",
+        minute: "2-digit",
+        timeZone: "Europe/Bucharest",
+      })
+    );
+  }, []);
+
+  // Auto refresh every 5 minutes (today only, not briefing)
+  useEffect(() => {
+    if (isBriefing) return;
+    if (!isToday(dateStr)) return;
+
+    importFromRomatsaInit();
+    const id = window.setInterval(() => {
+      importFromRomatsaInit();
+    }, AUTO_REFRESH_MIN * 60 * 1000);
+
+    return () => window.clearInterval(id);
+  }, [dateStr, isBriefing, importFromRomatsaInit]);
+
+  // ------------------------
+  // Compute timeline
+  // ------------------------
   const flightsParsed: Flight[] = useMemo(() => {
     return flights.map((f) => ({
       ...f,
@@ -585,20 +655,6 @@ useEffect(() => {
 
   const ifrBlocks = useMemo(() => buildIFRBlocks(flightsParsed, buffers), [flightsParsed, buffers]);
   const mergedIFR = useMemo(() => mergeBlocks(ifrBlocks), [ifrBlocks]);
-const ifrWarning = useMemo(() => {
-  if (!isToday(dateStr)) return null;
-
-  // Caută următoarea fereastră IFR care începe după "acum"
-  for (const b of mergedIFR) {
-    const minsToStart = b.start - nowM;
-
-    // Afișăm doar în ultimele 10 minute înainte de IFR
-    if (minsToStart > 0 && minsToStart <= 10) {
-      return { minsLeft: Math.ceil(minsToStart) };
-    }
-  }
-  return null;
-}, [dateStr, mergedIFR, nowM]);
   const freeWindows = useMemo(() => computeFreeWindows(mergedIFR, daylight), [mergedIFR, daylight]);
   const vfrWindows = useMemo(() => classifyVFR(freeWindows, 30, 20), [freeWindows]);
 
@@ -612,6 +668,19 @@ const ifrWarning = useMemo(() => {
     [vfrWindows]
   );
 
+  // Warning: IFR starts in <=10 minutes
+  const ifrWarning = useMemo(() => {
+    if (!isToday(dateStr)) return null;
+    for (const b of mergedIFR) {
+      const minsToStart = b.start - nowM;
+      if (minsToStart > 0 && minsToStart <= 10) return { minsLeft: Math.ceil(minsToStart) };
+    }
+    return null;
+  }, [dateStr, mergedIFR, nowM]);
+
+  // ------------------------
+  // Actions
+  // ------------------------
   function addRow() {
     setFlights((p) => [...p, { id: makeId(), type: "ARR", time: "" }]);
   }
@@ -619,22 +688,7 @@ const ifrWarning = useMemo(() => {
   function removeRow(id: string) {
     setFlights((p) => p.filter((x) => x.id !== id));
   }
-function clearToday() {
-  if (!window.confirm("Ștergi planul pentru ziua curentă?")) return;
 
-  setFlights([]);
-  // opțional: resetezi și buffer-ele la default
-  setBuffers({
-    arrBefore: 15,
-    arrAfter: 5,
-    depBefore: 10,
-    depAfter: 5,
-  });
-
-  try {
-    localStorage.removeItem(storageKey(dateStr));
-  } catch {}
-}
   function applyPaste() {
     const parsed = parsePaste(pasteText);
     if (!parsed.length) {
@@ -644,6 +698,15 @@ function clearToday() {
     setFlights((p) => [...p, ...parsed.map((x) => ({ id: makeId(), type: x.type, time: x.time }))]);
     setPasteText("");
     setPasteOpen(false);
+  }
+
+  function clearToday() {
+    if (!window.confirm("Ștergi planul pentru ziua curentă?")) return;
+    setFlights([]);
+    setBuffers({ arrBefore: 15, arrAfter: 5, depBefore: 10, depAfter: 5 });
+    try {
+      localStorage.removeItem(storageKey(dateStr));
+    } catch {}
   }
 
   // Inline sanity tests (dev-only)
@@ -664,18 +727,24 @@ function clearToday() {
     console.assert(normalizeTimeInput("0735") === "07:35", "normalizeTimeInput(0735) should become 07:35");
   }, []);
 
+  // ------------------------
+  // Render
+  // ------------------------
   return (
     <div className="p-4 md:p-6 space-y-4">
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-        <div>
+        <div className="space-y-2">
           <div className="text-xl font-semibold">ATC Day Timeline (Tablet)</div>
-{ifrWarning ? (
-  <div className="rounded-xl border border-yellow-300 bg-yellow-50 px-3 py-2 text-sm">
-    <div className="font-semibold">⚠️ IFR în {ifrWarning.minsLeft} minute</div>
-  </div>
-) : null}
+
+          {ifrWarning ? (
+            <div className="rounded-xl border border-yellow-300 bg-yellow-50 px-3 py-2 text-sm">
+              <div className="font-semibold">⚠️ IFR în {ifrWarning.minsLeft} minute</div>
+            </div>
+          ) : null}
+
           <div className="text-sm text-muted-foreground">
             Introduce doar ore ARR/DEP pentru ziua în curs. Obții timeline + ferestre VFR.
+            {isBriefing ? " (Briefing: read-only)" : ""}
           </div>
         </div>
 
@@ -683,7 +752,7 @@ function clearToday() {
           <Label className="text-xs text-muted-foreground">Zi</Label>
           <Input type="date" value={dateStr} onChange={(e) => setDateStr(e.target.value)} className="w-[160px]" />
           <div className="flex items-center gap-2 ml-2">
-            <Switch checked={showNow} onCheckedChange={setShowNow} />
+            <Switch checked={showNow} onCheckedChange={setShowNow} disabled={false} />
             <span className="text-xs text-muted-foreground">NOW</span>
           </div>
         </div>
@@ -694,22 +763,21 @@ function clearToday() {
           <CardHeader>
             <CardTitle className="text-base">Flight plan (Today)</CardTitle>
           </CardHeader>
+
           <CardContent>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
               <div>
                 <Label className="text-xs">ARR buffer</Label>
                 <div className="grid grid-cols-2 gap-2 mt-1">
                   <Input
-  disabled={isBriefing}
-  inputMode="numeric"
-  value={buffers.arrBefore}
-  onChange={(e) => {
-    if (isBriefing) return;
-    setBuffers((b) => ({ ...b, arrBefore: Number(e.target.value || 0) }));
-  }}
-/>
+                    disabled={isBriefing}
+                    inputMode="numeric"
+                    value={buffers.arrBefore}
+                    onChange={(e) => setBuffers((b) => ({ ...b, arrBefore: Number(e.target.value || 0) }))}
+                    placeholder="min înainte"
+                  />
                   <Input
-		    disabled={isBriefing}
+                    disabled={isBriefing}
                     inputMode="numeric"
                     value={buffers.arrAfter}
                     onChange={(e) => setBuffers((b) => ({ ...b, arrAfter: Number(e.target.value || 0) }))}
@@ -723,14 +791,14 @@ function clearToday() {
                 <Label className="text-xs">DEP buffer</Label>
                 <div className="grid grid-cols-2 gap-2 mt-1">
                   <Input
-		    disabled={isBriefing}
+                    disabled={isBriefing}
                     inputMode="numeric"
                     value={buffers.depBefore}
                     onChange={(e) => setBuffers((b) => ({ ...b, depBefore: Number(e.target.value || 0) }))}
                     placeholder="min înainte"
                   />
                   <Input
-		    disabled={isBriefing}
+                    disabled={isBriefing}
                     inputMode="numeric"
                     value={buffers.depAfter}
                     onChange={(e) => setBuffers((b) => ({ ...b, depAfter: Number(e.target.value || 0) }))}
@@ -740,25 +808,29 @@ function clearToday() {
                 <div className="text-[11px] text-muted-foreground mt-1">ex: -10 / +5</div>
               </div>
 
-             {!isBriefing && (
-  <div className="flex items-center justify-between gap-2">
-    <Button variant="secondary" onClick={() => setPasteOpen((v) => !v)}>
-      <ClipboardPaste className="h-4 w-4 mr-2" /> Paste
-    </Button>
-    <Button onClick={addRow}>
-      <Plus className="h-4 w-4 mr-2" /> Add
-    </Button>
-  </div>
-)}
-{!isBriefing && (
-  <Button
-    variant="outline"
-    onClick={clearToday}
-    className="text-red-600 border-red-300 hover:bg-red-50"
-  >
-    Clear today
-  </Button>
-)}
+              {!isBriefing ? (
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <Button variant="secondary" onClick={() => setPasteOpen((v) => !v)}>
+                      <ClipboardPaste className="h-4 w-4 mr-2" /> Paste
+                    </Button>
+                    <Button onClick={addRow}>
+                      <Plus className="h-4 w-4 mr-2" /> Add
+                    </Button>
+                  </div>
+                  <Button
+                    variant="outline"
+                    onClick={clearToday}
+                    className="text-red-600 border-red-300 hover:bg-red-50"
+                  >
+                    Clear today
+                  </Button>
+                </div>
+              ) : (
+                <div className="text-xs text-muted-foreground text-right">
+                  Editare blocată (briefing).
+                </div>
+              )}
             </div>
 
             {pasteOpen ? (
@@ -803,36 +875,34 @@ function clearToday() {
               {flights.map((f) => (
                 <div key={f.id} className="grid grid-cols-12 gap-2 items-center">
                   <div className="col-span-4">
-                   <select
-  disabled={isBriefing}
-  className="h-9 w-full rounded-xl border border-border bg-background px-3 text-sm"
-  value={f.type}
-  onChange={(e) => {
-    if (isBriefing) return;
-    const v = e.target.value as "ARR" | "DEP";
-    setFlights((p) => p.map((x) => (x.id === f.id ? { ...x, type: v } : x)));
-  }}
->
-  <option value="ARR">ARR</option>
-  <option value="DEP">DEP</option>
-</select>
+                    <select
+                      disabled={isBriefing}
+                      className="h-9 w-full rounded-xl border border-border bg-background px-3 text-sm disabled:opacity-50"
+                      value={f.type}
+                      onChange={(e) => {
+                        const v = e.target.value as "ARR" | "DEP";
+                        setFlights((p) => p.map((x) => (x.id === f.id ? { ...x, type: v } : x)));
+                      }}
+                    >
+                      <option value="ARR">ARR</option>
+                      <option value="DEP">DEP</option>
+                    </select>
                   </div>
 
                   <div className="col-span-6">
-                   <Input
-  disabled={isBriefing}
-  value={f.time}
-  onChange={(e) => {
-    if (isBriefing) return;
-    const v = normalizeTimeInput(e.target.value);
-    setFlights((p) => p.map((x) => (x.id === f.id ? { ...x, time: v } : x)));
-  }}
-  placeholder="HH:MM / HH.MM / HHMM"
-  className="font-mono"
-  inputMode="text"
-  autoCapitalize="off"
-  autoCorrect="off"
-/>
+                    <Input
+                      disabled={isBriefing}
+                      value={f.time}
+                      onChange={(e) => {
+                        const v = normalizeTimeInput(e.target.value);
+                        setFlights((p) => p.map((x) => (x.id === f.id ? { ...x, time: v } : x)));
+                      }}
+                      placeholder="HH:MM / HH.MM / HHMM"
+                      className="font-mono"
+                      inputMode="text"
+                      autoCapitalize="off"
+                      autoCorrect="off"
+                    />
                     {parseHHMM(f.time) == null && f.time ? (
                       <div className="text-[11px] text-red-500 mt-1">
                         Format invalid. Folosește HH:MM / HH.MM / HHMM (ex: 07:05, 07.05, 0705)
@@ -841,12 +911,14 @@ function clearToday() {
                   </div>
 
                   <div className="col-span-2 flex justify-end">
-  {!isBriefing && (
-    <Button variant="ghost" size="icon" onClick={() => removeRow(f.id)} title="Remove">
-      <Trash2 className="h-4 w-4" />
-    </Button>
-  )}
-</div>
+                    {!isBriefing ? (
+                      <Button variant="ghost" size="icon" onClick={() => removeRow(f.id)} title="Remove">
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    ) : (
+                      <div className="text-xs text-muted-foreground">—</div>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -857,13 +929,18 @@ function clearToday() {
           <CardHeader>
             <CardTitle className="text-base">Daylight (Bucharest) & Summary</CardTitle>
           </CardHeader>
+
           <CardContent className="space-y-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2 text-sm">
                 {daylight.enabled ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
                 <span>Limit to daylight</span>
               </div>
-              <Switch checked={daylight.enabled} onCheckedChange={(v) => setDaylight((d) => ({ ...d, enabled: v }))} />
+              <Switch
+                checked={daylight.enabled}
+                onCheckedChange={(v) => setDaylight((d) => ({ ...d, enabled: v }))}
+                disabled={false}
+              />
             </div>
 
             <div className={`space-y-2 ${daylight.enabled ? "" : "opacity-50 pointer-events-none"}`}>
@@ -872,27 +949,17 @@ function clearToday() {
                   <Wand2 className="h-4 w-4" />
                   <span>Auto sunrise/sunset (Europe/Bucharest)</span>
                 </div>
-                <Switch checked={autoSun} onCheckedChange={setAutoSun} />
+                <Switch checked={autoSun} onCheckedChange={setAutoSun} disabled={false} />
               </div>
 
               <div className={`grid grid-cols-2 gap-2 ${autoSun ? "opacity-70" : ""}`}>
                 <div>
                   <Label className="text-xs">Sunrise</Label>
-                  <Input
-                    className="font-mono"
-                    value={fmtHHMM(daylight.sunrise)}
-                    disabled={autoSun}
-                    placeholder={autoSun ? "auto" : "HH:MM"}
-                  />
+                  <Input className="font-mono" value={fmtHHMM(daylight.sunrise)} disabled={autoSun} />
                 </div>
                 <div>
                   <Label className="text-xs">Sunset</Label>
-                  <Input
-                    className="font-mono"
-                    value={fmtHHMM(daylight.sunset)}
-                    disabled={autoSun}
-                    placeholder={autoSun ? "auto" : "HH:MM"}
-                  />
+                  <Input className="font-mono" value={fmtHHMM(daylight.sunset)} disabled={autoSun} />
                 </div>
               </div>
 
@@ -947,6 +1014,12 @@ function clearToday() {
                 <span className="text-muted-foreground">VFR 20–29</span>
                 <span className="font-mono">{Math.round(totalVFRposs)} min</span>
               </div>
+
+              {lastUpdate ? (
+                <div className="text-xs text-muted-foreground mt-2">
+                  Last update (ROMATSA): <span className="font-mono">{lastUpdate}</span>
+                </div>
+              ) : null}
             </div>
 
             <div className="text-[11px] text-muted-foreground">
@@ -960,6 +1033,3 @@ function clearToday() {
     </div>
   );
 }
-
-export default App;
-
